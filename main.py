@@ -154,6 +154,7 @@ async def download_mp3(req: DownloadRequest):
 
     extra = {
         "format": "bestaudio/best",
+        "format_sort": ["abr", "asr", "acodec"],  # Prioriza audio, acepta cualquier codec
         "outtmpl": output_template,
         "postprocessors": [{
             "key": "FFmpegExtractAudio",

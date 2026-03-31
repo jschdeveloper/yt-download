@@ -6,14 +6,15 @@ import tempfile
 from pathlib import Path
 from contextlib import asynccontextmanager
 
+import static_ffmpeg
+static_ffmpeg.add_paths()
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import yt_dlp
 
 
-# ── Directorio temporal para los MP3 generados ──────────────────────────────
 DOWNLOAD_DIR = Path(tempfile.gettempdir()) / "yt_mp3_downloads"
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
@@ -21,7 +22,6 @@ DOWNLOAD_DIR.mkdir(exist_ok=True)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    # Limpieza de archivos al apagar el servidor
     for f in DOWNLOAD_DIR.glob("*.mp3"):
         try:
             f.unlink()
@@ -32,7 +32,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="YT MP3 Downloader", lifespan=lifespan)
 
 
-# ── Modelos ──────────────────────────────────────────────────────────────────
 class DownloadRequest(BaseModel):
     url: str
 
@@ -44,7 +43,6 @@ class VideoInfo(BaseModel):
     channel: str
 
 
-# ── Utilidades ───────────────────────────────────────────────────────────────
 def segundos_a_duracion(segundos: int) -> str:
     m, s = divmod(segundos, 60)
     h, m = divmod(m, 60)
@@ -57,7 +55,25 @@ def es_url_valida(url: str) -> bool:
     return bool(re.match(r"https?://(www\.)?(youtube\.com|youtu\.be)/", url))
 
 
-# ── Endpoints ────────────────────────────────────────────────────────────────
+# Opciones comunes para evitar bloqueos de YouTube
+YDL_BASE_OPTS = {
+    "quiet": True,
+    "noplaylist": True,
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android", "web"],  # Simula app Android
+        }
+    },
+    "http_headers": {
+        "User-Agent": (
+            "Mozilla/5.0 (Linux; Android 12; Pixel 6) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/112.0.0.0 Mobile Safari/537.36"
+        )
+    },
+}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     html_path = Path(__file__).parent / "index.html"
@@ -66,11 +82,10 @@ async def index():
 
 @app.post("/info")
 async def get_video_info(req: DownloadRequest) -> VideoInfo:
-    """Obtiene metadatos del video antes de descargar."""
     if not es_url_valida(req.url):
         raise HTTPException(status_code=400, detail="URL de YouTube no válida.")
 
-    opts = {"quiet": True, "skip_download": True, "noplaylist": True}
+    opts = {**YDL_BASE_OPTS, "skip_download": True}
 
     try:
         loop = asyncio.get_event_loop()
@@ -93,7 +108,6 @@ async def get_video_info(req: DownloadRequest) -> VideoInfo:
 
 @app.post("/download")
 async def download_mp3(req: DownloadRequest):
-    """Descarga el audio del video y devuelve el archivo MP3."""
     if not es_url_valida(req.url):
         raise HTTPException(status_code=400, detail="URL de YouTube no válida.")
 
@@ -101,10 +115,9 @@ async def download_mp3(req: DownloadRequest):
     output_template = str(DOWNLOAD_DIR / f"{file_id}.%(ext)s")
 
     opts = {
+        **YDL_BASE_OPTS,
         "format": "bestaudio/best",
         "outtmpl": output_template,
-        "noplaylist": True,
-        "quiet": True,
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",
@@ -134,7 +147,6 @@ async def download_mp3(req: DownloadRequest):
         path=str(mp3_path),
         media_type="audio/mpeg",
         filename=f"{safe_title}.mp3",
-        background=None,
     )
 
 
